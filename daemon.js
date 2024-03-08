@@ -1,60 +1,142 @@
-const ZKJUBAER = require('zk-jubaer'); // Ajusta la ruta según sea necesario
+const cron = require("node-cron");
+const axios = require("axios");
+const ZKJUBAER = require("zk-jubaer");
+const moment = require("moment");
 
-const yargs = require('yargs/yargs');
-const { hideBin } = require('yargs/helpers');
 
-const argv = yargs(hideBin(process.argv)).option('deviceIp', {
-    alias: 'd',
-    description: 'La IP del dispositivo biométrico',
-    type: 'string',
-}).option('empresaId', {
-    alias: 'e',
-    description: 'El ID de la empresa',
-    type: 'string',
-}).help().alias('help', 'h').argv;
+const readline = require("readline").createInterface({
+  input: process.stdin,
+  output: process.stdout,
+});
 
-const sincronizarDatosBiometricos = async () => {
-    const { deviceIp, empresaId } = argv;
-    console.log(deviceIp, empresaId);
-    let zk = new ZKJUBAER(deviceIp, 4370, 5200, 5000);
+const yargs = require("yargs/yargs");
 
-    try {
-        await zk.createSocket();
-    } catch (error) {
-        console.log(error);
+const { hideBin } = require("yargs/helpers");
+
+const argv = yargs(hideBin(process.argv))
+.option("deviceIp", {
+    alias: "ip",
+    demandOption:true,
+    description: "La IP del dispositivo biométrico",
+    type: "string",
+  })
+  .option("port", {
+    alias: "port",
+    demandOption:true,
+    description: "puerto del biometrico",
+    type: "string",
+  })
+  // .option("dump hour", {
+  //   alias: "port",
+  //   demandOption:true,
+  //   description: "hora de translacion de asistencias al sistema formato: ['hora','minutos']",
+  //   type: "array",
+  // })
+  .help()
+  .alias("help", "h").argv;
+
+// Configuración del dispositivo biométrico
+const BIOMETRIC_DEVICE_IP = argv.ip
+const BIOMETRIC_DEVICE_PORT = argv.port
+
+// URL del endpoint del backend para enviar las asistencias
+const BACKEND_URL = "http://localhost:3000/api/sync";
+
+// Función para obtener las asistencias del dispositivo biométrico
+async function obtenerAsistencias() {
+  let zk = new ZKJUBAER(BIOMETRIC_DEVICE_IP, BIOMETRIC_DEVICE_PORT, 10000, 4000);
+  try {
+    await zk.createSocket();
+    let attendancesinfo = await zk.getAttendanceSize();
+    console.log(attendancesinfo);
+    if(attendancesinfo>0){
+      let attendances = await zk.getAttendances();
+      let attendancesDelete = await zk.clearAttendanceLog();
+      
+      return attendances.data.map((att) => ({
+        deviceUserId: att.deviceUserId,
+        tiempoRegistro: new Date(att.timestamp),
+      }));
     }
+    await zk.disconnect();
+    
+  } catch (error) {
+    console.error(
+      "Error al obtener asistencias del dispositivo biométrico:",
+      error
+    );
+    console.log(attendances.data);
+    return attendances.data;
+  }
+} 
 
-    try {
-        const users = await zk.getUsers();
-        console.log("Usuarios obtenidos del dispositivo biométrico:", users);
+// Función para enviar asistencias al backend
+async function enviarAsistencias(asistencias, _empresaId) {
+  try {
+   
+    const response = await axios.post(`${BACKEND_URL}/sincronizar-asistencias/${_empresaId}`, {
+      asistencias,
+      timestamp: moment().format(),
+    });
+    console.log("Respuesta del backend:", response.data);
+  } catch (error) {
+    console.error("Error al enviar asistencias al backend:", error);
+  }
+}
 
-        for (const user of users.data) {
-            const { uid, name, role, userId } = user;
-            let empleado = await Empleado.findOne({ userId });
-            if (!empleado) {
-                empleado = new Empleado({
-                    uidBiometrico: userId,
-                    nombre: name,
-                    role: role,
-                    sincronizadoBiometrico: true,
-                    empresa: empresaId
-                });
-                await empleado.save();
-            } else {a
-                await Empleado.findByIdAndUpdate(empleado._id, {
-                    nombre: name,
-                    role: role,
-                    userIdBiometrico: userId,
-                    sincronizadoBiometrico: true
-                });
-            }
+async function autenticar() {
+  return new Promise((resolve, reject) => {
+    readline.question("Username: ", (username) => {
+      readline.question("Password: ", async (password) => {
+        try {
+          const response = await axios.post("http://localhost:3000/api/auth", {
+            username,
+            password,
+          });
+          console.log(response);
+          empresaId = response.data.usuario.empresa;
+
+          resolve(response.data); // Asumiendo que la API responde con algún tipo de token de acceso
+        } catch (error) {
+          console.error("Error de autenticación:", error);
+          reject(error);
+        } finally {
+          readline.close();
         }
-        await zk.disconnect();
-        console.log('Sincronización de empleados completa');
-    } catch (error) {
-        console.error("Error al sincronizar datos con el dispositivo biométrico:", error);
-        await zk.disconnect();
-    }
-};
+      });
+    });
+  });
+}
+autenticar()
+  .then((token) => {
+    
+    console.log("Autenticación exitosa");
+    console.log(token.token);
+    
 
-sincronizarDatosBiometricos();
+    // Tarea cron para ejecutar a las 23:59 todos los días
+    cron.schedule(
+      "* 17 * * *",
+      async () => {
+        console.log("Ejecutando tarea para sincronizar asistencias...");
+        const asistencias = await obtenerAsistencias();
+        console.log(asistencias);
+        if (asistencias===undefined ) {
+          console.log("No hay asistencias para sincronizar.");
+        }
+        if (asistencias.length > 0 ) {
+          await enviarAsistencias(asistencias, empresaId);
+        } else {
+          console.log("No hay asistencias para sincronizar.");
+        }
+      },
+      {
+        scheduled: true,
+        timezone: "America/Mexico_City",
+      }
+    );
+  })
+  .catch((error) => {
+    console.error("Falló la autenticación", error);
+  });
+
