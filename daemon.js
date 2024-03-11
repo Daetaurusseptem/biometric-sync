@@ -1,7 +1,11 @@
 const cron = require("node-cron");
+
 const axios = require("axios");
+
 const ZKJUBAER = require("zk-jubaer");
-const moment = require("moment");
+
+const dayjs = require('dayjs');
+
 
 
 const readline = require("readline").createInterface({
@@ -36,8 +40,8 @@ const argv = yargs(hideBin(process.argv))
   .alias("help", "h").argv;
 
 // Configuración del dispositivo biométrico
-const BIOMETRIC_DEVICE_IP = argv.ip
-const BIOMETRIC_DEVICE_PORT = argv.port
+const BIOMETRIC_DEVICE_IP = argv.ip;
+const BIOMETRIC_DEVICE_PORT = argv.port;                
 
 // URL del endpoint del backend para enviar las asistencias
 const BACKEND_URL = "http://localhost:3000/api/sync";
@@ -52,11 +56,13 @@ async function obtenerAsistencias() {
     if(attendancesinfo>0){
       let attendances = await zk.getAttendances();
       let attendancesDelete = await zk.clearAttendanceLog();
-      
-      return attendances.data.map((att) => ({
-        deviceUserId: att.deviceUserId,
-        tiempoRegistro: new Date(att.timestamp),
+      console.log(attendances);
+      const attendancesFormat =  attendances.data.map((att) => ({
+        deviceUserId: att.deviceUserId         ,
+        tiempoRegistro: new Date(dayjs(att.recordTime).format('YYYY-MM-DDTHH:mm:ssZ'))  
       }));
+      console.log(attendancesFormat);
+      return attendancesFormat
     }
     await zk.disconnect();
     
@@ -75,8 +81,7 @@ async function enviarAsistencias(asistencias, _empresaId) {
   try {
    
     const response = await axios.post(`${BACKEND_URL}/sincronizar-asistencias/${_empresaId}`, {
-      asistencias,
-      timestamp: moment().format(),
+      asistencias
     });
     console.log("Respuesta del backend:", response.data);
   } catch (error) {
@@ -101,7 +106,9 @@ async function autenticar() {
           console.error("Error de autenticación:", error);
           reject(error);
         } finally {
+
           readline.close();
+
         }
       });
     });
@@ -116,7 +123,7 @@ autenticar()
 
     // Tarea cron para ejecutar a las 23:59 todos los días
     cron.schedule(
-      "* 17 * * *",
+      "* 15 * * *",
       async () => {
         console.log("Ejecutando tarea para sincronizar asistencias...");
         const asistencias = await obtenerAsistencias();
