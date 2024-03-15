@@ -44,7 +44,7 @@ const BIOMETRIC_DEVICE_IP = argv.ip;
 const BIOMETRIC_DEVICE_PORT = argv.port;                
 
 // URL del endpoint del backend para enviar las asistencias
-const BACKEND_URL = "http://localhost:3000/api/sync";
+const BACKEND_URL = "https://biometric-integration.onrender.com/api/";
 
 // Función para obtener las asistencias del dispositivo biométrico
 async function obtenerAsistencias() {
@@ -77,12 +77,16 @@ async function obtenerAsistencias() {
 } 
 
 // Función para enviar asistencias al backend
-async function enviarAsistencias(asistencias, _empresaId) {
+async function enviarAsistencias(asistencias, _empresaId, token) {
   try {
-   
-    const response = await axios.post(`${BACKEND_URL}/sincronizar-asistencias/${_empresaId}`, {
+    console.log(token,'tokeeeen');
+    const response = await axios.post(`${BACKEND_URL}sync/sincronizar-asistencias/${_empresaId}`, {
       asistencias
-    });
+    },
+    {headers:{
+    'x-token':token
+    }}
+    );
     console.log("Respuesta del backend:", response.data);
   } catch (error) {
     console.error("Error al enviar asistencias al backend:", error);
@@ -94,11 +98,11 @@ async function autenticar() {
     readline.question("Username: ", (username) => {
       readline.question("Password: ", async (password) => {
         try {
-          const response = await axios.post("http://localhost:3000/api/auth", {
+          const response = await axios.post(`${BACKEND_URL}auth`, {
             username,
             password,
           });
-          console.log(response);
+          
           empresaId = response.data.usuario.empresa;
 
           resolve(response.data); // Asumiendo que la API responde con algún tipo de token de acceso
@@ -115,15 +119,14 @@ async function autenticar() {
   });
 }
 autenticar()
-  .then((token) => {
+  .then((resp) => {
     
     console.log("Autenticación exitosa");
-    console.log(token.token);
-    
+    const token = resp.token
 
     // Tarea cron para ejecutar a las 23:59 todos los días
     cron.schedule(
-      "* 15 * * *",
+      "* 17 * * *",
       async () => {
         console.log("Ejecutando tarea para sincronizar asistencias...");
         const asistencias = await obtenerAsistencias();
@@ -132,7 +135,7 @@ autenticar()
           console.log("No hay asistencias para sincronizar.");
         }
         if (asistencias.length > 0 ) {
-          await enviarAsistencias(asistencias, empresaId);
+          await enviarAsistencias(asistencias, empresaId, token);
         } else {
           console.log("No hay asistencias para sincronizar.");
         }
